@@ -97,8 +97,16 @@ init_db()
 # ─── AUTH ────────────────────────────────────────────────────────────────────
 
 def check_admin(req):
-    key = req.headers.get('X-Admin-Key') or req.args.get('key') or (req.json or {}).get('key', '')
+    key = req.headers.get("X-Admin-Key") or req.args.get("key", "")
+    if not key:
+        try:
+            key = (req.get_json(silent=True) or {}).get("key", "")
+        except Exception:
+            key = ""
     return key == ADMIN_KEY
+
+
+
 
 # ─── HELPERS ────────────────────────────────────────────────────────────────
 
