@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Тестер — Подготовка к экзаменам</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Geologica:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/main.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- NAV -->
+    <nav class="nav" id="nav">
+      <a class="nav-logo" href="#" data-page="home">
+        <span class="nav-logo-icon">◈</span>
+        <span>Тестер</span>
+      </a>
+      <div class="nav-links">
+        <a href="#" data-page="home" class="nav-link active">Тесты</a>
+        <a href="#" data-page="profile" class="nav-link">Мои результаты</a>
+        <a href="#" data-page="admin" class="nav-link nav-admin hidden" id="adminNavLink">Панель</a>
+      </div>
+      <button class="nav-admin-btn" id="adminBtn" title="Вход для администратора">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M6 20v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/></svg>
+      </button>
+    </nav>
+
+    <!-- PAGES -->
+    <main id="main">
+      <!-- HOME -->
+      <section id="page-home" class="page active">
+        <div class="hero">
+          <div class="hero-label">Система подготовки</div>
+          <h1 class="hero-title">Готовься<br><em>умнее</em></h1>
+          <p class="hero-sub">Проходи тесты, отслеживай прогресс и уверенно сдавай экзамены</p>
+        </div>
+        <div class="section-header">
+          <h2>Доступные тесты</h2>
+          <div class="search-wrap">
+            <input type="text" id="searchInput" placeholder="Поиск теста…" class="search-input" />
+          </div>
+        </div>
+        <div class="tests-grid" id="testsGrid">
+          <div class="loading-state">
+            <div class="spinner"></div>
+            <span>Загрузка…</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- TEST -->
+      <section id="page-test" class="page">
+        <div id="testPreview" class="test-preview hidden">
+          <button class="back-btn" data-page="home">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+            Назад
+          </button>
+          <div class="preview-card">
+            <div class="preview-badge">Тест</div>
+            <h1 id="previewTitle">—</h1>
+            <p id="previewDesc" class="preview-desc"></p>
+            <div class="preview-meta" id="previewMeta"></div>
+            <div class="timer-setup">
+              <div class="timer-option">
+                <label class="toggle-label">
+                  <span>Таймер на весь тест</span>
+                  <input type="checkbox" id="timerTotal" class="toggle-cb" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+                <div class="timer-input-wrap hidden" id="timerTotalWrap">
+                  <input type="number" id="timerTotalVal" min="1" max="180" value="10" class="timer-input" />
+                  <span>мин</span>
+                </div>
+              </div>
+              <div class="timer-option">
+                <label class="toggle-label">
+                  <span>Таймер на вопрос</span>
+                  <input type="checkbox" id="timerPerQ" class="toggle-cb" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+                <div class="timer-input-wrap hidden" id="timerPerQWrap">
+                  <input type="number" id="timerPerQVal" min="5" max="300" value="60" class="timer-input" />
+                  <span>сек</span>
+                </div>
+              </div>
+            </div>
+            <button class="btn-primary btn-start" id="startTestBtn">
+              Начать тест
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div id="testSession" class="test-session hidden">
+          <div class="test-header">
+            <button class="back-btn ghost" id="abortBtn">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+            </button>
+            <div class="test-progress-wrap">
+              <div class="test-progress-bar" id="progressBar"></div>
+            </div>
+            <div class="test-counters">
+              <span id="questionCounter">1 / 10</span>
+              <div class="timer-display hidden" id="timerDisplay">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                <span id="timerValue">—</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="question-wrap" id="questionWrap">
+            <div class="question-card" id="questionCard">
+              <div class="question-type-badge" id="questionTypeBadge"></div>
+              <div class="question-text" id="questionText"></div>
+              <img id="questionImage" class="question-image hidden" alt="" />
+              <div class="answers-list" id="answersList"></div>
+              <button class="btn-primary btn-next hidden" id="nextBtn">
+                Далее
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div id="testResult" class="test-result hidden">
+          <div class="result-card">
+            <div class="result-icon" id="resultIcon"></div>
+            <h2 id="resultTitle">Тест завершён!</h2>
+            <p id="resultSubtitle" class="result-subtitle"></p>
+            <div class="result-stats" id="resultStats"></div>
+            <div class="result-detail" id="resultDetail"></div>
+            <div class="result-actions">
+              <button class="btn-secondary" id="retryBtn">Пройти ещё раз</button>
+              <button class="btn-primary" data-page="home">К списку тестов</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PROFILE -->
+      <section id="page-profile" class="page">
+        <div class="page-header">
+          <h2>Мои результаты</h2>
+          <p>История прохождений на этом устройстве</p>
+        </div>
+        <div id="profileContent">
+          <div class="loading-state"><div class="spinner"></div><span>Загрузка…</span></div>
+        </div>
+      </section>
+
+      <!-- ADMIN -->
+      <section id="page-admin" class="page">
+        <div id="adminLogin" class="admin-login">
+          <div class="login-card">
+            <div class="login-icon">⚙</div>
+            <h2>Вход в панель</h2>
+            <p>Введите ключ администратора</p>
+            <div class="login-form">
+              <input type="password" id="adminKeyInput" placeholder="Ключ доступа" class="form-input" />
+              <button class="btn-primary" id="adminLoginBtn">Войти</button>
+            </div>
+            <div class="login-error hidden" id="loginError">Неверный ключ</div>
+          </div>
+        </div>
+
+        <div id="adminPanel" class="admin-panel hidden">
+          <div class="admin-header">
+            <h2>Панель администратора</h2>
+            <div class="admin-header-actions">
+              <button class="btn-primary" id="newTestBtn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+                Создать тест
+              </button>
+              <button class="btn-ghost" id="importBtn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                Импорт
+              </button>
+              <button class="btn-ghost" id="adminLogoutBtn">Выйти</button>
+            </div>
+          </div>
+          <div id="adminTestsList"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- MODALS -->
+  <div class="modal-overlay hidden" id="modalOverlay">
+    <div class="modal" id="modal">
+      <div class="modal-header">
+        <h3 id="modalTitle">—</h3>
+        <button class="modal-close" id="modalClose">✕</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
