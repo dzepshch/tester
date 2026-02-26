@@ -170,7 +170,10 @@ async function loadTest(testId) {
   try {
     const test = await apiFetch(`/api/tests/${testId}`);
     currentTest = test;
-    currentQuestions = test.questions || [];
+    // Перемешиваем вопросы и ответы
+    const qs = test.questions || [];
+    qs.forEach(q => { q.answers = shuffle(q.answers); });
+    currentQuestions = shuffle(qs);
 
     document.getElementById('previewTitle').textContent = test.title;
     document.getElementById('previewDesc').textContent = test.description || '';
@@ -849,6 +852,16 @@ async function handleImport() {
 /* ── Util ─────────────────────────────────────────────────────────────────── */
 function esc(str) {
   return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ── Util: shuffle ───────────────────────────────────────────────────────── */
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
 }
 
 /* ── Init ─────────────────────────────────────────────────────────────────── */
