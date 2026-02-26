@@ -321,7 +321,7 @@ function selectAnswer(q, answerId, itemEl) {
   const aid = String(answerId);
 
   if (q.multiple) {
-    // Множественный выбор: toggleим, НЕ блокируем, показываем кнопку «Проверить»
+    // Множественный: можно менять выбор до нажатия «Далее»
     if (!userAnswers[qid]) userAnswers[qid] = [];
     const idx = userAnswers[qid].indexOf(aid);
     if (idx > -1) {
@@ -333,17 +333,18 @@ function selectAnswer(q, answerId, itemEl) {
       itemEl.classList.add('selected');
       itemEl.querySelector('.answer-marker').innerHTML = '✓';
     }
-    // Показываем «Проверить» если хоть что-то выбрано, иначе скрываем
+    // Кнопка «Далее» — сразу переходит, без промежуточного шага
     const nextBtn = document.getElementById('nextBtn');
+    const isLast = currentQIndex === currentQuestions.length - 1;
     if (userAnswers[qid].length > 0) {
       nextBtn.classList.remove('hidden');
-      nextBtn.textContent = 'Проверить ответ';
-      nextBtn.onclick = () => confirmMultiple(q);
+      nextBtn.textContent = isLast ? 'Завершить тест' : 'Далее →';
+      nextBtn.onclick = advanceQuestion;
     } else {
       nextBtn.classList.add('hidden');
     }
   } else {
-    // Одиночный: блокируем сразу после выбора
+    // Одиночный: можно менять ответ до нажатия «Далее»
     userAnswers[qid] = [aid];
     document.querySelectorAll('.answer-item').forEach(i => {
       i.classList.remove('selected');
@@ -351,25 +352,13 @@ function selectAnswer(q, answerId, itemEl) {
     });
     itemEl.classList.add('selected');
     itemEl.querySelector('.answer-marker').innerHTML = '●';
-    document.querySelectorAll('.answer-item').forEach(i => i.classList.add('disabled'));
-    if (document.getElementById('timerPerQ').checked) clearInterval(timerInterval);
-    // Показываем «Далее» без немедленной проверки (проверка на сервере при финише)
+    // Показываем «Далее», ответ НЕ блокируем — можно перевыбрать
     const nextBtn = document.getElementById('nextBtn');
     const isLast = currentQIndex === currentQuestions.length - 1;
     nextBtn.textContent = isLast ? 'Завершить тест' : 'Далее →';
     nextBtn.onclick = advanceQuestion;
     nextBtn.classList.remove('hidden');
   }
-}
-
-function confirmMultiple(q) {
-  // Блокируем варианты и меняем кнопку на «Далее»
-  document.querySelectorAll('.answer-item').forEach(i => i.classList.add('disabled'));
-  if (document.getElementById('timerPerQ').checked) clearInterval(timerInterval);
-  const nextBtn = document.getElementById('nextBtn');
-  const isLast = currentQIndex === currentQuestions.length - 1;
-  nextBtn.textContent = isLast ? 'Завершить тест' : 'Далее →';
-  nextBtn.onclick = advanceQuestion;
 }
 
 function revealAnswers(q, qResult) {
