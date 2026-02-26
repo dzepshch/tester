@@ -318,49 +318,58 @@ function autoAdvance() {
 function selectAnswer(q, answerId, itemEl) {
   if (itemEl.classList.contains('disabled')) return;
   const qid = q.id;
+  const aid = String(answerId);
 
   if (q.multiple) {
+    // Множественный выбор: toggleим, НЕ блокируем, показываем кнопку «Проверить»
     if (!userAnswers[qid]) userAnswers[qid] = [];
-    const idx = userAnswers[qid].indexOf(answerId);
+    const idx = userAnswers[qid].indexOf(aid);
     if (idx > -1) {
       userAnswers[qid].splice(idx, 1);
       itemEl.classList.remove('selected');
       itemEl.querySelector('.answer-marker').innerHTML = '';
     } else {
-      userAnswers[qid].push(answerId);
+      userAnswers[qid].push(aid);
       itemEl.classList.add('selected');
       itemEl.querySelector('.answer-marker').innerHTML = '✓';
     }
-    // Show next button if any selected
-    document.getElementById('nextBtn').classList.toggle('hidden', userAnswers[qid].length === 0);
+    // Показываем «Проверить» если хоть что-то выбрано, иначе скрываем
+    const nextBtn = document.getElementById('nextBtn');
+    if (userAnswers[qid].length > 0) {
+      nextBtn.classList.remove('hidden');
+      nextBtn.textContent = 'Проверить ответ';
+      nextBtn.onclick = () => confirmMultiple(q);
+    } else {
+      nextBtn.classList.add('hidden');
+    }
   } else {
-    // Single: immediate reveal
-    userAnswers[qid] = [answerId];
+    // Одиночный: блокируем сразу после выбора
+    userAnswers[qid] = [aid];
     document.querySelectorAll('.answer-item').forEach(i => {
       i.classList.remove('selected');
       i.querySelector('.answer-marker').innerHTML = '';
     });
     itemEl.classList.add('selected');
     itemEl.querySelector('.answer-marker').innerHTML = '●';
-    // Disable & show feedback
     document.querySelectorAll('.answer-item').forEach(i => i.classList.add('disabled'));
-    showFeedbackImmediate(q, answerId);
     if (document.getElementById('timerPerQ').checked) clearInterval(timerInterval);
-    document.getElementById('nextBtn').classList.remove('hidden');
+    // Показываем «Далее» без немедленной проверки (проверка на сервере при финише)
+    const nextBtn = document.getElementById('nextBtn');
+    const isLast = currentQIndex === currentQuestions.length - 1;
+    nextBtn.textContent = isLast ? 'Завершить тест' : 'Далее →';
+    nextBtn.onclick = advanceQuestion;
+    nextBtn.classList.remove('hidden');
   }
 }
 
-function showFeedbackImmediate(q, selectedId) {
-  // We don't know correct answers yet (not loaded), so we defer to checkAnswers call
-  // We just show "ответ принят" and reveal on advance via checkedResults
-  // Actually for single-select we show placeholder; real reveal after check
-  // Let's just mark as answered and show the next btn
-  const feedbackEl = document.createElement('div');
-  feedbackEl.id = 'feedbackBar';
-  feedbackEl.className = 'feedback-bar';
-  feedbackEl.innerHTML = `<span>Ответ записан. Нажмите «Далее» для следующего вопроса.</span>`;
-  feedbackEl.style.cssText = 'background:var(--bg-card2);color:var(--text-2);border:1px solid var(--border)';
-  document.getElementById('answersList').after(feedbackEl);
+function confirmMultiple(q) {
+  // Блокируем варианты и меняем кнопку на «Далее»
+  document.querySelectorAll('.answer-item').forEach(i => i.classList.add('disabled'));
+  if (document.getElementById('timerPerQ').checked) clearInterval(timerInterval);
+  const nextBtn = document.getElementById('nextBtn');
+  const isLast = currentQIndex === currentQuestions.length - 1;
+  nextBtn.textContent = isLast ? 'Завершить тест' : 'Далее →';
+  nextBtn.onclick = advanceQuestion;
 }
 
 function revealAnswers(q, qResult) {
