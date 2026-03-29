@@ -16,14 +16,21 @@ app = Flask(__name__, static_folder=STATIC_DIR, template_folder=TEMPLATES_DIR)
 CORS(app)
 
 ADMIN_KEY = os.environ.get('ADMIN_KEY', 'admin123')
-DATABASE_URL = os.environ.get('DATABASE_URL')  # postgresql://postgres:password@db.xxx.supabase.co:5432/postgres
 
-# ─── DB ──────────────────────────────────────────────────────────────────────
+# ─── DB ───────────────────────────────────────────────────────────────────────
 
 def get_db():
-    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+    url = os.environ.get('DATABASE_URL')
+    if not url:
+        raise RuntimeError('DATABASE_URL is not set')
+    return psycopg.connect(url, row_factory=dict_row)
 
-def init_db():
+_db_initialized = False
+
+def ensure_db():
+    global _db_initialized
+    if _db_initialized:
+        return
     with get_db() as conn:
         conn.execute('''
             CREATE TABLE IF NOT EXISTS tests (
@@ -65,10 +72,10 @@ def init_db():
                 finished_at TIMESTAMPTZ DEFAULT NOW()
             )
         ''')
-        # Seed demo test if empty
         row = conn.execute('SELECT COUNT(*) as c FROM tests').fetchone()
         if row['c'] == 0:
             _seed_demo(conn)
+    _db_initialized = True
 
 def _seed_demo(conn):
     row = conn.execute(
@@ -76,7 +83,6 @@ def _seed_demo(conn):
         ("История России", "Тест по теме Петровских реформ", 300)
     ).fetchone()
     test_id = row['id']
-
     row = conn.execute(
         "INSERT INTO questions (test_id, text, multiple, sort_order) VALUES (%s, %s, 0, 1) RETURNING id",
         (test_id, "Кто был первым российским императором?")
@@ -84,7 +90,6 @@ def _seed_demo(conn):
     q1 = row['id']
     for txt, correct in [("Пётр I", 1), ("Иван IV", 0), ("Александр I", 0)]:
         conn.execute("INSERT INTO answers (question_id, text, correct) VALUES (%s, %s, %s)", (q1, txt, correct))
-
     row = conn.execute(
         "INSERT INTO questions (test_id, text, multiple, sort_order) VALUES (%s, %s, 1, 2) RETURNING id",
         (test_id, "Выберите реформы Петра I")
@@ -92,8 +97,6 @@ def _seed_demo(conn):
     q2 = row['id']
     for txt, correct in [("Создание Сената", 1), ("Отмена крепостного права", 0), ("Введение Табели о рангах", 1)]:
         conn.execute("INSERT INTO answers (question_id, text, correct) VALUES (%s, %s, %s)", (q2, txt, correct))
-
-init_db()
 
 # ─── AUTH ─────────────────────────────────────────────────────────────────────
 
@@ -108,13 +111,15 @@ def check_admin(req):
 
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
 
-def test_to_dict(row, include_questions=False):
+def serialize(row):
     d = dict(row)
-    # Convert datetime to string for JSON serialization
-    if d.get('created_at') and hasattr(d['created_at'], 'isoformat'):
-        d['created_at'] = d['created_at'].isoformat()
-    if d.get('finished_at') and hasattr(d['finished_at'], 'isoformat'):
-        d['finished_at'] = d['finished_at'].isoformat()
+    for k, v in d.items():
+        if hasattr(v, 'isoformat'):
+            d[k] = v.isoformat()
+    return d
+
+def test_to_dict(row, include_questions=False):
+    d = serialize(row)
     if include_questions:
         with get_db() as conn:
             questions = conn.execute(
@@ -131,12 +136,11 @@ def test_to_dict(row, include_questions=False):
             d['questions'] = qs
     return d
 
-def serialize(row):
-    d = dict(row)
-    for k, v in d.items():
-        if hasattr(v, 'isoformat'):
-            d[k] = v.isoformat()
-    return d
+# ─── BEFORE REQUEST ───────────────────────────────────────────────────────────
+
+@app.before_request
+def before_request():
+    ensure_db()
 
 # ─── ROUTES: STATIC ───────────────────────────────────────────────────────────
 
@@ -178,7 +182,7 @@ def get_test(test_id):
         if not check_admin(request):
             for q in d.get('questions', []):
                 for a in q.get('answers', []):
-                    del a['correct']
+                    a.pop('correct', None)
     return jsonify(d)
 
 @app.route('/api/tests/<int:test_id>/check', methods=['POST'])
@@ -287,7 +291,6 @@ def admin_create_test():
             (title, data.get('description', ''), data.get('time_limit', 0), data.get('time_per_question', 0))
         ).fetchone()
         test_id = row['id']
-
         for i, q in enumerate(data.get('questions', [])):
             row = conn.execute(
                 'INSERT INTO questions (test_id, text, image, multiple, sort_order) VALUES (%s,%s,%s,%s,%s) RETURNING id',
