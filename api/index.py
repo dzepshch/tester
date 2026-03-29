@@ -2,15 +2,13 @@ import os
 import json
 import csv
 import io
-import hashlib
 import secrets
-from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory, abort
 from flask_cors import CORS
-import sqlite3
+import psycopg
+from psycopg.rows import dict_row
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.environ.get('DB_PATH', os.path.join('/tmp', 'tester.db'))
 STATIC_DIR = os.path.join(BASE_DIR, '..', 'static')
 TEMPLATES_DIR = os.path.join(BASE_DIR, '..', 'templates')
 
@@ -18,83 +16,86 @@ app = Flask(__name__, static_folder=STATIC_DIR, template_folder=TEMPLATES_DIR)
 CORS(app)
 
 ADMIN_KEY = os.environ.get('ADMIN_KEY', 'admin123')
+DATABASE_URL = os.environ.get('DATABASE_URL')  # postgresql://postgres:password@db.xxx.supabase.co:5432/postgres
 
-# ─── DB SETUP ───────────────────────────────────────────────────────────────
+# ─── DB ──────────────────────────────────────────────────────────────────────
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
 def init_db():
     with get_db() as conn:
-        conn.executescript('''
+        conn.execute('''
             CREATE TABLE IF NOT EXISTS tests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 title TEXT NOT NULL,
                 description TEXT,
                 time_limit INTEGER DEFAULT 0,
                 time_per_question INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT (datetime('now')),
+                created_at TIMESTAMPTZ DEFAULT NOW(),
                 active INTEGER DEFAULT 1
-            );
+            )
+        ''')
+        conn.execute('''
             CREATE TABLE IF NOT EXISTS questions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                test_id INTEGER NOT NULL,
+                id SERIAL PRIMARY KEY,
+                test_id INTEGER NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
                 text TEXT NOT NULL,
                 image TEXT,
                 multiple INTEGER DEFAULT 0,
-                sort_order INTEGER DEFAULT 0,
-                FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
-            );
+                sort_order INTEGER DEFAULT 0
+            )
+        ''')
+        conn.execute('''
             CREATE TABLE IF NOT EXISTS answers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                question_id INTEGER NOT NULL,
+                id SERIAL PRIMARY KEY,
+                question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
                 text TEXT NOT NULL,
-                correct INTEGER DEFAULT 0,
-                FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
-            );
+                correct INTEGER DEFAULT 0
+            )
+        ''')
+        conn.execute('''
             CREATE TABLE IF NOT EXISTS results (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                test_id INTEGER NOT NULL,
+                id SERIAL PRIMARY KEY,
+                test_id INTEGER NOT NULL REFERENCES tests(id),
                 session_id TEXT NOT NULL,
                 score INTEGER DEFAULT 0,
                 total INTEGER DEFAULT 0,
                 time_spent INTEGER DEFAULT 0,
-                finished_at TEXT DEFAULT (datetime('now')),
-                FOREIGN KEY (test_id) REFERENCES tests(id)
-            );
+                finished_at TIMESTAMPTZ DEFAULT NOW()
+            )
         ''')
         # Seed demo test if empty
-        cur = conn.execute('SELECT COUNT(*) as c FROM tests')
-        if cur.fetchone()['c'] == 0:
+        row = conn.execute('SELECT COUNT(*) as c FROM tests').fetchone()
+        if row['c'] == 0:
             _seed_demo(conn)
 
 def _seed_demo(conn):
-    conn.execute(
-        "INSERT INTO tests (title, description, time_limit) VALUES (?, ?, ?)",
+    row = conn.execute(
+        "INSERT INTO tests (title, description, time_limit) VALUES (%s, %s, %s) RETURNING id",
         ("История России", "Тест по теме Петровских реформ", 300)
-    )
-    test_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    conn.execute(
-        "INSERT INTO questions (test_id, text, multiple, sort_order) VALUES (?, ?, 0, 1)",
-        (test_id, "Кто был первым российским императором?")
-    )
-    q1 = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    for txt, correct in [("Пётр I", 1), ("Иван IV", 0), ("Александр I", 0)]:
-        conn.execute("INSERT INTO answers (question_id, text, correct) VALUES (?, ?, ?)", (q1, txt, correct))
+    ).fetchone()
+    test_id = row['id']
 
-    conn.execute(
-        "INSERT INTO questions (test_id, text, multiple, sort_order) VALUES (?, ?, 1, 2)",
+    row = conn.execute(
+        "INSERT INTO questions (test_id, text, multiple, sort_order) VALUES (%s, %s, 0, 1) RETURNING id",
+        (test_id, "Кто был первым российским императором?")
+    ).fetchone()
+    q1 = row['id']
+    for txt, correct in [("Пётр I", 1), ("Иван IV", 0), ("Александр I", 0)]:
+        conn.execute("INSERT INTO answers (question_id, text, correct) VALUES (%s, %s, %s)", (q1, txt, correct))
+
+    row = conn.execute(
+        "INSERT INTO questions (test_id, text, multiple, sort_order) VALUES (%s, %s, 1, 2) RETURNING id",
         (test_id, "Выберите реформы Петра I")
-    )
-    q2 = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    ).fetchone()
+    q2 = row['id']
     for txt, correct in [("Создание Сената", 1), ("Отмена крепостного права", 0), ("Введение Табели о рангах", 1)]:
-        conn.execute("INSERT INTO answers (question_id, text, correct) VALUES (?, ?, ?)", (q2, txt, correct))
+        conn.execute("INSERT INTO answers (question_id, text, correct) VALUES (%s, %s, %s)", (q2, txt, correct))
 
 init_db()
 
-# ─── AUTH ────────────────────────────────────────────────────────────────────
+# ─── AUTH ─────────────────────────────────────────────────────────────────────
 
 def check_admin(req):
     key = req.headers.get("X-Admin-Key") or req.args.get("key", "")
@@ -105,30 +106,39 @@ def check_admin(req):
             key = ""
     return key == ADMIN_KEY
 
-
-
-
-# ─── HELPERS ────────────────────────────────────────────────────────────────
+# ─── HELPERS ──────────────────────────────────────────────────────────────────
 
 def test_to_dict(row, include_questions=False):
     d = dict(row)
+    # Convert datetime to string for JSON serialization
+    if d.get('created_at') and hasattr(d['created_at'], 'isoformat'):
+        d['created_at'] = d['created_at'].isoformat()
+    if d.get('finished_at') and hasattr(d['finished_at'], 'isoformat'):
+        d['finished_at'] = d['finished_at'].isoformat()
     if include_questions:
         with get_db() as conn:
             questions = conn.execute(
-                'SELECT * FROM questions WHERE test_id=? ORDER BY sort_order', (d['id'],)
+                'SELECT * FROM questions WHERE test_id=%s ORDER BY sort_order', (d['id'],)
             ).fetchall()
             qs = []
             for q in questions:
                 qd = dict(q)
                 answers = conn.execute(
-                    'SELECT * FROM answers WHERE question_id=?', (q['id'],)
+                    'SELECT * FROM answers WHERE question_id=%s', (q['id'],)
                 ).fetchall()
                 qd['answers'] = [dict(a) for a in answers]
                 qs.append(qd)
             d['questions'] = qs
     return d
 
-# ─── ROUTES: STATIC ─────────────────────────────────────────────────────────
+def serialize(row):
+    d = dict(row)
+    for k, v in d.items():
+        if hasattr(v, 'isoformat'):
+            d[k] = v.isoformat()
+    return d
+
+# ─── ROUTES: STATIC ───────────────────────────────────────────────────────────
 
 @app.route('/')
 def index():
@@ -136,37 +146,35 @@ def index():
 
 @app.route('/<path:path>')
 def static_files(path):
-    # Try templates first, then static
     tpl = os.path.join(TEMPLATES_DIR, path)
     if os.path.isfile(tpl):
         return send_from_directory(TEMPLATES_DIR, path)
     return send_from_directory(STATIC_DIR, path)
 
-# ─── API: TESTS ─────────────────────────────────────────────────────────────
+# ─── API: TESTS ───────────────────────────────────────────────────────────────
 
 @app.route('/api/tests', methods=['GET'])
 def get_tests():
     with get_db() as conn:
         rows = conn.execute(
-            '''SELECT t.*, 
+            '''SELECT t.*,
                COUNT(DISTINCT r.id) as attempts,
-               ROUND(AVG(CASE WHEN r.total>0 THEN r.score*100.0/r.total END),1) as avg_score
+               ROUND(AVG(CASE WHEN r.total>0 THEN r.score*100.0/r.total END)::numeric, 1) as avg_score
                FROM tests t
                LEFT JOIN results r ON r.test_id = t.id
                WHERE t.active=1
                GROUP BY t.id
                ORDER BY t.created_at DESC'''
         ).fetchall()
-    return jsonify([dict(r) for r in rows])
+    return jsonify([serialize(r) for r in rows])
 
 @app.route('/api/tests/<int:test_id>', methods=['GET'])
 def get_test(test_id):
     with get_db() as conn:
-        row = conn.execute('SELECT * FROM tests WHERE id=? AND active=1', (test_id,)).fetchone()
+        row = conn.execute('SELECT * FROM tests WHERE id=%s AND active=1', (test_id,)).fetchone()
         if not row:
             abort(404)
         d = test_to_dict(row, include_questions=True)
-        # Remove correct flags for non-admin
         if not check_admin(request):
             for q in d.get('questions', []):
                 for a in q.get('answers', []):
@@ -175,16 +183,15 @@ def get_test(test_id):
 
 @app.route('/api/tests/<int:test_id>/check', methods=['POST'])
 def check_answers(test_id):
-    """Check submitted answers, return correct/wrong per question"""
     data = request.json or {}
-    answers_submitted = data.get('answers', {})  # {question_id: [answer_id, ...]}
+    answers_submitted = data.get('answers', {})
 
     with get_db() as conn:
-        test = conn.execute('SELECT * FROM tests WHERE id=? AND active=1', (test_id,)).fetchone()
+        test = conn.execute('SELECT * FROM tests WHERE id=%s AND active=1', (test_id,)).fetchone()
         if not test:
             abort(404)
         questions = conn.execute(
-            'SELECT * FROM questions WHERE test_id=? ORDER BY sort_order', (test_id,)
+            'SELECT * FROM questions WHERE test_id=%s ORDER BY sort_order', (test_id,)
         ).fetchall()
 
         results = {}
@@ -195,11 +202,11 @@ def check_answers(test_id):
             qid = str(q['id'])
             submitted = set(str(x) for x in answers_submitted.get(qid, []))
             correct_answers = conn.execute(
-                'SELECT id FROM answers WHERE question_id=? AND correct=1', (q['id'],)
+                'SELECT id FROM answers WHERE question_id=%s AND correct=1', (q['id'],)
             ).fetchall()
             correct_ids = set(str(a['id']) for a in correct_answers)
             all_answers = conn.execute(
-                'SELECT * FROM answers WHERE question_id=?', (q['id'],)
+                'SELECT * FROM answers WHERE question_id=%s', (q['id'],)
             ).fetchall()
 
             is_correct = submitted == correct_ids
@@ -213,11 +220,10 @@ def check_answers(test_id):
                 'answers': [dict(a) for a in all_answers]
             }
 
-        # Save result
         session_id = data.get('session_id', secrets.token_hex(8))
         time_spent = data.get('time_spent', 0)
         conn.execute(
-            'INSERT INTO results (test_id, session_id, score, total, time_spent) VALUES (?,?,?,?,?)',
+            'INSERT INTO results (test_id, session_id, score, total, time_spent) VALUES (%s,%s,%s,%s,%s)',
             (test_id, session_id, score, total, time_spent)
         )
 
@@ -231,20 +237,19 @@ def check_answers(test_id):
 
 @app.route('/api/results', methods=['GET'])
 def get_results():
-    """Get results for a session"""
     session_id = request.args.get('session_id', '')
     if not session_id:
         return jsonify([])
     with get_db() as conn:
         rows = conn.execute(
-            '''SELECT r.*, t.title FROM results r 
+            '''SELECT r.*, t.title FROM results r
                JOIN tests t ON t.id = r.test_id
-               WHERE r.session_id=? ORDER BY r.finished_at DESC''',
+               WHERE r.session_id=%s ORDER BY r.finished_at DESC''',
             (session_id,)
         ).fetchall()
-    return jsonify([dict(r) for r in rows])
+    return jsonify([serialize(r) for r in rows])
 
-# ─── API: ADMIN ──────────────────────────────────────────────────────────────
+# ─── API: ADMIN ───────────────────────────────────────────────────────────────
 
 @app.route('/api/admin/verify', methods=['POST'])
 def verify_admin():
@@ -258,14 +263,14 @@ def admin_get_tests():
         abort(403)
     with get_db() as conn:
         rows = conn.execute(
-            '''SELECT t.*, 
+            '''SELECT t.*,
                COUNT(DISTINCT r.id) as attempts,
-               ROUND(AVG(CASE WHEN r.total>0 THEN r.score*100.0/r.total END),1) as avg_score
+               ROUND(AVG(CASE WHEN r.total>0 THEN r.score*100.0/r.total END)::numeric, 1) as avg_score
                FROM tests t
                LEFT JOIN results r ON r.test_id = t.id
                GROUP BY t.id ORDER BY t.created_at DESC'''
         ).fetchall()
-    return jsonify([dict(r) for r in rows])
+    return jsonify([serialize(r) for r in rows])
 
 @app.route('/api/admin/tests', methods=['POST'])
 def admin_create_test():
@@ -277,21 +282,21 @@ def admin_create_test():
         return jsonify({'error': 'Название обязательно'}), 400
 
     with get_db() as conn:
-        conn.execute(
-            'INSERT INTO tests (title, description, time_limit, time_per_question) VALUES (?,?,?,?)',
+        row = conn.execute(
+            'INSERT INTO tests (title, description, time_limit, time_per_question) VALUES (%s,%s,%s,%s) RETURNING id',
             (title, data.get('description', ''), data.get('time_limit', 0), data.get('time_per_question', 0))
-        )
-        test_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        ).fetchone()
+        test_id = row['id']
 
         for i, q in enumerate(data.get('questions', [])):
-            conn.execute(
-                'INSERT INTO questions (test_id, text, image, multiple, sort_order) VALUES (?,?,?,?,?)',
+            row = conn.execute(
+                'INSERT INTO questions (test_id, text, image, multiple, sort_order) VALUES (%s,%s,%s,%s,%s) RETURNING id',
                 (test_id, q.get('text', ''), q.get('image'), int(q.get('multiple', False)), i)
-            )
-            qid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            ).fetchone()
+            qid = row['id']
             for a in q.get('answers', []):
                 conn.execute(
-                    'INSERT INTO answers (question_id, text, correct) VALUES (?,?,?)',
+                    'INSERT INTO answers (question_id, text, correct) VALUES (%s,%s,%s)',
                     (qid, a.get('text', ''), int(a.get('correct', False)))
                 )
     return jsonify({'id': test_id, 'ok': True})
@@ -301,7 +306,7 @@ def admin_get_test(test_id):
     if not check_admin(request):
         abort(403)
     with get_db() as conn:
-        row = conn.execute('SELECT * FROM tests WHERE id=?', (test_id,)).fetchone()
+        row = conn.execute('SELECT * FROM tests WHERE id=%s', (test_id,)).fetchone()
         if not row:
             abort(404)
         d = test_to_dict(row, include_questions=True)
@@ -314,23 +319,22 @@ def admin_update_test(test_id):
     data = request.json or {}
     with get_db() as conn:
         conn.execute(
-            'UPDATE tests SET title=?, description=?, time_limit=?, time_per_question=?, active=? WHERE id=?',
+            'UPDATE tests SET title=%s, description=%s, time_limit=%s, time_per_question=%s, active=%s WHERE id=%s',
             (data.get('title'), data.get('description', ''),
              data.get('time_limit', 0), data.get('time_per_question', 0),
              int(data.get('active', 1)), test_id)
         )
-        # Replace questions
         if 'questions' in data:
-            conn.execute('DELETE FROM questions WHERE test_id=?', (test_id,))
+            conn.execute('DELETE FROM questions WHERE test_id=%s', (test_id,))
             for i, q in enumerate(data['questions']):
-                conn.execute(
-                    'INSERT INTO questions (test_id, text, image, multiple, sort_order) VALUES (?,?,?,?,?)',
+                row = conn.execute(
+                    'INSERT INTO questions (test_id, text, image, multiple, sort_order) VALUES (%s,%s,%s,%s,%s) RETURNING id',
                     (test_id, q.get('text', ''), q.get('image'), int(q.get('multiple', False)), i)
-                )
-                qid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                ).fetchone()
+                qid = row['id']
                 for a in q.get('answers', []):
                     conn.execute(
-                        'INSERT INTO answers (question_id, text, correct) VALUES (?,?,?)',
+                        'INSERT INTO answers (question_id, text, correct) VALUES (%s,%s,%s)',
                         (qid, a.get('text', ''), int(a.get('correct', False)))
                     )
     return jsonify({'ok': True})
@@ -340,7 +344,7 @@ def admin_delete_test(test_id):
     if not check_admin(request):
         abort(403)
     with get_db() as conn:
-        conn.execute('DELETE FROM tests WHERE id=?', (test_id,))
+        conn.execute('DELETE FROM tests WHERE id=%s', (test_id,))
     return jsonify({'ok': True})
 
 @app.route('/api/admin/tests/<int:test_id>/toggle', methods=['POST'])
@@ -348,16 +352,14 @@ def admin_toggle_test(test_id):
     if not check_admin(request):
         abort(403)
     with get_db() as conn:
-        conn.execute('UPDATE tests SET active = 1 - active WHERE id=?', (test_id,))
-        row = conn.execute('SELECT active FROM tests WHERE id=?', (test_id,)).fetchone()
+        conn.execute('UPDATE tests SET active = 1 - active WHERE id=%s', (test_id,))
+        row = conn.execute('SELECT active FROM tests WHERE id=%s', (test_id,)).fetchone()
     return jsonify({'active': row['active']})
 
 @app.route('/api/admin/import', methods=['POST'])
 def admin_import():
-    """Import test from JSON or CSV file"""
     if not check_admin(request):
         abort(403)
-
     if 'file' not in request.files:
         return jsonify({'error': 'Файл не найден'}), 400
 
@@ -367,12 +369,10 @@ def admin_import():
     try:
         if filename.endswith('.json'):
             data = json.load(f)
-            # data is either a single test object or list
             tests = data if isinstance(data, list) else [data]
         elif filename.endswith('.csv'):
             content = f.read().decode('utf-8-sig')
             reader = csv.DictReader(io.StringIO(content))
-            # CSV format: test_title, test_description, question_text, answer_text, correct (true/false), multiple
             tests_map = {}
             for row in reader:
                 ttitle = row.get('test_title', 'Импортированный тест')
@@ -403,22 +403,22 @@ def admin_import():
         created = []
         with get_db() as conn:
             for test_data in tests:
-                conn.execute(
-                    'INSERT INTO tests (title, description, time_limit) VALUES (?,?,?)',
+                row = conn.execute(
+                    'INSERT INTO tests (title, description, time_limit) VALUES (%s,%s,%s) RETURNING id',
                     (test_data.get('title', 'Без названия'),
                      test_data.get('description', ''),
                      test_data.get('time_limit', 0))
-                )
-                tid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                ).fetchone()
+                tid = row['id']
                 for i, q in enumerate(test_data.get('questions', [])):
-                    conn.execute(
-                        'INSERT INTO questions (test_id, text, image, multiple, sort_order) VALUES (?,?,?,?,?)',
+                    row = conn.execute(
+                        'INSERT INTO questions (test_id, text, image, multiple, sort_order) VALUES (%s,%s,%s,%s,%s) RETURNING id',
                         (tid, q.get('text', ''), q.get('image'), int(q.get('multiple', False)), i)
-                    )
-                    qid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                    ).fetchone()
+                    qid = row['id']
                     for a in q.get('answers', []):
                         conn.execute(
-                            'INSERT INTO answers (question_id, text, correct) VALUES (?,?,?)',
+                            'INSERT INTO answers (question_id, text, correct) VALUES (%s,%s,%s)',
                             (qid, a.get('text', ''), int(a.get('correct', False)))
                         )
                 created.append(tid)
