@@ -23,7 +23,7 @@ def get_db():
     url = os.environ.get('DATABASE_URL')
     if not url:
         raise RuntimeError('DATABASE_URL is not set')
-    return psycopg.connect(url, row_factory=dict_row)
+    return psycopg.connect(url, row_factory=dict_row, prepare_threshold=None)
 
 _db_initialized = False
 
